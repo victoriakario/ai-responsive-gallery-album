@@ -1,306 +1,201 @@
 <?php
 global $wpdb;
 
+// Confirm user capability before proceeding
+if ( ! current_user_can( 'upload_files' ) ) {
+	wp_die( __( 'You do not have sufficient permissions to access this page.' ) );
+}
+
 $ai_show_table_album = $wpdb->prefix . "ai_album";
-$ai_check_album_nonce=$_REQUEST['_wpnonce'];
 
-if($_REQUEST['action'] == 'Edit') {
-	$ai_edit_res=$wpdb->get_results("select * from $ai_show_table_album where album_id='".$_REQUEST['id']."'",ARRAY_A);
-	
-	if(!empty($ai_edit_res[0]['album_cover_image'])) {
-		$ai_file_thumb=AI_GALLERY_THUMB_URL_PATH.'/';
-		$ai_album_cover =$ai_edit_res[0]['album_cover_image'];
-		$album_name= explode('.',$ai_edit_res[0]['album_cover_image']);
-		$thub_album_name=$album_name[0].'-thumb'.'.'.$album_name[1];
-	} else {
-		$ai_file_thumb=AI_URL_PATH.'/images/';
-		$thub_album_name='no_photo.jpg';
+if ( $_SERVER['REQUEST_METHOD'] === 'POST' && isset( $_POST['Submit'] ) && $_POST['Submit'] !== 'Cancel' ) {
+	$ai_check_album_nonce = $_POST['_wpnonce'] ?? '';
+
+	if ( ! wp_verify_nonce( $ai_check_album_nonce, 'add-album' ) ) {
+		wp_die( __( 'Security check failed.', 'aigallery' ) );
 	}
 }
 
-if(isset($_REQUEST['Submit']) && $_REQUEST['Submit']=='Cancel') {
-	$location=admin_url().'admin.php?page=ai_gallery';
-	echo'<script> window.location="'.$location.'"; </script> ';
+
+// Cancel button action
+if ( isset( $_POST['Submit'] ) && $_POST['Submit'] === 'Cancel' ) {
+	wp_redirect( admin_url( 'admin.php?page=ai_gallery' ) );
+	exit;
 }
 
-if(wp_verify_nonce( $ai_check_album_nonce, 'add-album' )) {
-	if(isset($_REQUEST['Submit']) && $_REQUEST['Submit']=='Save' && $_REQUEST['Action']=='Add' ) {
-		if(isset($_FILES['album_image']) && ($_FILES['album_image']['size'] > 0)) {
-		
-			// image upload
-			if ( ! function_exists( 'wp_handle_upload' ) )
-				require_once( ABSPATH . 'wp-admin/includes/file.php' );
-
-			//replace non-word to - in file name
-			$ai_with_space_album= explode('.',$_FILES['album_image']['name']);
-			$ai_without_space_album = trim(preg_replace("/\W+/", "-", $ai_with_space_album[0]), "-");// \W = any "non-word" character
-			$_FILES['album_image']['name']= $ai_without_space_album.'.'.$ai_with_space_album[1];
-
-			//checking file exsit in uploaded folder or not.
-			if(file_exists(AI_GALLERY_DIR_PATH.'/'.$_FILES['album_image']['name']))
-			{
-				$ai_album_name = explode('.',$_FILES['album_image']['name']);
-				$_FILES['album_image']['name']=$ai_album_name[0].'_'.generate_random_string().'.'.$ai_album_name[1];
-			}
-
-			// Get the type of the uploaded file. This is returned as "type/extension"
-			$ai_arr_file_type = wp_check_filetype(basename($_FILES['album_image']['name']));
-			$ai_uploaded_file_type = $ai_arr_file_type['type'];
-
-			$ai_uploadedfile = $_FILES['album_image'];
-			$ai_allowed_file_types = array('image/jpg','image/jpeg','image/gif','image/png');
-
-			// If the uploaded file is the right format
-			if(in_array($ai_uploaded_file_type, $ai_allowed_file_types)) {
-				$ai_upload_overrides = array( 'test_form' => false );
-				add_filter('upload_dir', 'ai_upload_dir');
-				$ai_add_movefile = wp_handle_upload( $ai_uploadedfile, $ai_upload_overrides );
-			}
-		}
-		$ai_add_file = $ai_add_movefile['file'];
-		$ai_add_file_thumb=AI_GALLERY_THUMB_DIR_PATH.'/';
-		$ai_add_image = wp_get_image_editor($ai_add_file);
-
-		//Resize Image for generate thymbnails.
-		if ( ! is_wp_error( $ai_add_image ) ) {
-			$ai_add_image->resize( 200, 200, false );
-			$ai_add_image->set_quality( 100 );
-			$ai_add_filename = $ai_add_image->generate_filename( 'thumb',$ai_add_file_thumb, NULL );
-			$ai_saved_thumb=$ai_add_image->save($ai_add_filename);
-		}		
-
-		// creating album slug using it's title
-		$ai_album_slug = strtolower(strtolower($_REQUEST['album_title']));
-		$ai_album_slug = preg_replace("/\W+/", "-", $ai_album_slug); // \W = any "non-word" character
-		$ai_album_slug = trim($ai_album_slug, "-");
-
-
-		// checking album title exsit or not
-		$res=$wpdb->get_results("select * from $ai_show_table_album where album_title='".$_REQUEST['album_title']."'");
-		if(count($res) > 0)
-			$_REQUEST['album_title'] = $_REQUEST['album_title'].'-'.generate_random_string();
-
-		// checking album slug exsit or not
-		$res=$wpdb->get_results("select * from $ai_show_table_album where album_slug='".$ai_album_slug."'");
-		if(count($res) > 0)
-			$ai_album_slug = $ai_album_slug.'-'.generate_random_string();
-
-		//getting max album order
-		$ai_album_get_res = $wpdb->get_results("SELECT MAX(album_order) as album_max_order FROM $ai_show_table_album",ARRAY_A) ;
-		$ai_albumorder = 0;
-		if(isset($ai_album_get_res))
-			$ai_albumorder = $ai_album_get_res[0]['album_max_order'];	
-
-		$ai_albumorder += 1;
-
-		//insert table data with user input
-		$ai_album_data=array(
-			'album_title'=>$_REQUEST['album_title'],
-			'album_date'=>date('Y-m-d'),
-			'album_cover_image'=>$_FILES['album_image']['name'],
-			'album_slug'=>$ai_album_slug,
-			'album_visible'=>$_REQUEST['album_visible'],
-			'album_order'=>$ai_albumorder
-		);
-
-		$wpdb->insert($ai_show_table_album,$ai_album_data);
-		remove_filter('upload_dir', 'ai_upload_dir');
-		$location=admin_url().'admin.php?page=ai_gallery&album_insert_success=1';
-		echo'<script> window.location="'.$location.'"; </script> ';
-
-	}
-
-	if(isset($_REQUEST['Submit']) && $_REQUEST['Submit']=='Update' && $_REQUEST['Action']=='Update' ) {
-
-		if(isset($_FILES['album_image']) && ($_FILES['album_image']['size'] > 0)) {
-
-			// image upload
-			if ( ! function_exists( 'wp_handle_upload' ) )
-				require_once( ABSPATH . 'wp-admin/includes/file.php' );
-
-			//replace non-word to - in file name
-			$ai_with_space_album= explode('.',$_FILES['album_image']['name']);
-			$ai_without_space_album = trim(preg_replace("/\W+/", "-", $ai_with_space_album[0]), "-");// \W = any "non-word" character
-			$_FILES['album_image']['name']= $ai_without_space_album.'.'.$ai_with_space_album[1];
-
-			//checking file exsit in uploaded folder or not.
-			if(file_exists(AI_GALLERY_DIR_PATH.'/'.$_FILES['album_image']['name'])) {
-				$ai_album_name = explode('.',$_FILES['album_image']['name']);
-				$_FILES['album_image']['name']=$ai_album_name[0].'_'.generate_random_string().'.'.$ai_album_name[1];
-			}
-
-			// Get the type of the uploaded file. This is returned as "type/extension"
-			$ai_arr_file_type = wp_check_filetype(basename($_FILES['album_image']['name']));
-			$ai_uploaded_file_type = $ai_arr_file_type['type'];
-			$ai_uploadedfile = $_FILES['album_image'];
-			$ai_allowed_file_types = array('image/jpg','image/jpeg','image/gif','image/png');
-
-			// If the uploaded file is the right format
-			if(in_array($ai_uploaded_file_type, $ai_allowed_file_types)) {
-				$ai_upload_overrides = array( 'test_form' => false );
-				add_filter('upload_dir', 'ai_upload_dir');
-				$ai_edit_movefile = wp_handle_upload( $ai_uploadedfile, $ai_upload_overrides );
-			}
-		}
-
-		$ai_edit_file = $ai_edit_movefile['file'];
-		$ai_edit_file_thumb=AI_GALLERY_THUMB_DIR_PATH.'/';
-
-		//Resize Image for generate thymbnails.
-		$ai_edit_image = wp_get_image_editor($ai_edit_file);
-
-		if ( ! is_wp_error( $ai_edit_image ) ) {
-			$ai_edit_image->resize( 200, 200, false );
-			$ai_edit_image->set_quality( 100 );
-			$ai_edit_filename = $ai_edit_image->generate_filename( 'thumb',$ai_edit_file_thumb, NULL );
-			$ai_edit_saved_thumb=$ai_edit_image->save($ai_edit_filename);
-		}		
-
-		// creating album slug using it's title
-		$ai_album_slug = strtolower(strtolower($_REQUEST['album_title']));
-		$ai_album_slug = preg_replace("/\W+/", "-", $ai_album_slug); // \W = any "non-word" character
-		$ai_album_slug = trim($ai_album_slug, "-");
-
-		// checking album title exsit or not
-		$res=$wpdb->get_results("select album_title from $ai_show_table_album where album_title='".$_REQUEST['album_title']."' and album_id='".$_REQUEST['album_id']."'");
-		if(count($res) < 1)
-		{
-			$allres=$wpdb->get_results("select album_title from $ai_show_table_album where album_title='".$_REQUEST['album_title']."'");
-			if(count($allres) > 0)
-				$_REQUEST['album_title'] = $_REQUEST['album_title'].'-'.generate_random_string();
-		}
-
-		// checking album slug exsit or not
-		$res=$wpdb->get_results("select * from $ai_show_table_album where album_slug='".$ai_album_slug."'");
-		if(count($res) > 0)
-			$ai_album_slug = $ai_album_slug.'-'.generate_random_string();
-
-		//checking condition for userwant to update photo or not.
-		if(isset($_FILES['album_image']['name'])) {
-			$album_cover_image=$_FILES['album_image']['name'];
-		}
-
-		if($_FILES['album_image']['name'] == '') {
-			$album_cover_image=$ai_album_cover;
-		}
-
-		//update table data with user input
-		$ai_album_data=array(
-			'album_title'=>$_REQUEST['album_title'],
-			'album_date'=>date('Y-m-d'),
-			'album_cover_image'=>$album_cover_image,
-			'album_slug'=>$ai_album_slug,
-			'album_visible'=>$_REQUEST['album_visible'],
-		);
-
-		$wpdb->update($ai_show_table_album,$ai_album_data,array('album_id'=>$_REQUEST['album_id']));
-		remove_filter('upload_dir', 'ai_upload_dir');
-		$location=admin_url().'admin.php?page=ai_gallery&album_update_success=1';
-		echo'<script> window.location="'.$location.'"; </script> ';
-	}
-}
-
-function ai_upload_dir($upload) {
-	$upload['subdir']	= '/al_gallery_files';
-	$upload['path']		= $upload['basedir'] . $upload['subdir'];
-	$upload['url']		= $upload['baseurl'] . $upload['subdir'];
+// Helper functions
+function ai_upload_dir( $upload ) {
+	$upload['subdir'] = '/al_gallery_files';
+	$upload['path']   = $upload['basedir'] . $upload['subdir'];
+	$upload['url']    = $upload['baseurl'] . $upload['subdir'];
 	return $upload;
 }
 
-function generate_random_string($name_length = 4) {
+function generate_random_string( $name_length = 4 ) {
 	$alpha_numeric = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-	return substr(str_shuffle($alpha_numeric), 0, $name_length);
+	return substr( str_shuffle( $alpha_numeric ), 0, $name_length );
+}
+
+function sanitize_filename( $filename ) {
+	$parts = explode( '.', $filename );
+	$base  = trim( preg_replace( "/\W+/", "-", $parts[0] ), "-" );
+	return $base . '.' . $parts[1];
+}
+
+// Handle Add
+if ( isset( $_POST['Submit'], $_POST['Action'] ) && $_POST['Submit'] === 'Save' && $_POST['Action'] === 'Add' ) {
+	$album_title   = sanitize_text_field( $_POST['album_title'] );
+	$album_visible = ( $_POST['album_visible'] === '1' ) ? '1' : '0';
+
+	// Slug
+	$album_slug = preg_replace( "/\W+/", "-", strtolower( $album_title ) );
+	$album_slug = trim( $album_slug, "-" );
+
+	// Avoid duplicate titles/slugs
+	if ( $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $ai_show_table_album WHERE album_title = %s", $album_title ) ) ) {
+		$album_title .= '-' . generate_random_string();
+	}
+	if ( $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $ai_show_table_album WHERE album_slug = %s", $album_slug ) ) ) {
+		$album_slug .= '-' . generate_random_string();
+	}
+
+	// Order
+	$album_order = (int) $wpdb->get_var( "SELECT MAX(album_order) FROM $ai_show_table_album" ) + 1;
+
+	$filename = '';
+	if ( ! empty( $_FILES['album_image']['name'] ) && $_FILES['album_image']['size'] > 0 ) {
+		require_once ABSPATH . 'wp-admin/includes/file.php';
+
+		$_FILES['album_image']['name'] = sanitize_filename( $_FILES['album_image']['name'] );
+
+		// Avoid overwrite
+		$upload_dir = AI_GALLERY_DIR_PATH;
+		if ( file_exists( $upload_dir . '/' . $_FILES['album_image']['name'] ) ) {
+			$parts = explode( '.', $_FILES['album_image']['name'] );
+			$_FILES['album_image']['name'] = $parts[0] . '_' . generate_random_string() . '.' . $parts[1];
+		}
+
+		$allowed   = [ 'image/jpg', 'image/jpeg', 'image/png', 'image/gif' ];
+		$filetype  = wp_check_filetype( $_FILES['album_image']['name'] )['type'];
+		$upload_ok = in_array( $filetype, $allowed, true );
+
+		if ( $upload_ok ) {
+			add_filter( 'upload_dir', 'ai_upload_dir' );
+			$upload = wp_handle_upload( $_FILES['album_image'], [ 'test_form' => false ] );
+			remove_filter( 'upload_dir', 'ai_upload_dir' );
+
+			if ( ! isset( $upload['error'] ) ) {
+				$filename = basename( $upload['file'] );
+
+				// Create thumbnail
+				$image = wp_get_image_editor( $upload['file'] );
+				if ( ! is_wp_error( $image ) ) {
+					$image->resize( 200, 200, false );
+					$image->set_quality( 100 );
+					$image->save( $image->generate_filename( 'thumb', AI_GALLERY_THUMB_DIR_PATH ) );
+				}
+			}
+		}
+	}
+
+	// Insert into DB
+	$wpdb->insert(
+		$ai_show_table_album,
+		[
+			'album_title'       => $album_title,
+			'album_date'        => current_time( 'Y-m-d' ),
+			'album_cover_image' => $filename,
+			'album_slug'        => $album_slug,
+			'album_visible'     => $album_visible,
+			'album_order'       => $album_order,
+		]
+	);
+
+	wp_redirect( admin_url( 'admin.php?page=ai_gallery&album_insert_success=1' ) );
+	exit;
 }
 
 ?>
 
 <script type="text/javascript">
-jQuery(document).ready(function() {	
-	// validate Album Form form on keyup and submit
-	jQuery("#frmnewalbum").validate({
-		rules: {
-			album_title: {
-				required: true,
-			},
-			album_image:{
-				accept: "jpg|jpeg|png|gif"
+
+document.addEventListener('DOMContentLoaded', function () {
+	const form = document.getElementById('frmnewalbum');
+
+	form.addEventListener('submit', function (event) {
+		let valid = true;
+		let errors = [];
+
+		// Check Album Title
+		const albumTitle = document.getElementById('album_title');
+		if (!albumTitle.value.trim()) {
+			valid = false;
+			errors.push('Please enter an album title.');
+		}
+
+		// Check Album Image File Type (if file selected)
+		const albumImage = document.getElementById('album_image');
+		if (albumImage.files.length > 0) {
+			const file = albumImage.files[0];
+			const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif'];
+			if (!allowedTypes.includes(file.type)) {
+				valid = false;
+				errors.push('Only JPG, JPEG, PNG or GIF files are allowed.');
 			}
-		},
-		messages: {
-			album_title: {
-				required: "Please provide a Album Title",
-			},
-			album_image:{
-				accept: "only .jpg,.jpeg,.png and .gif files are allowed",
-			}
+		}
+
+		// Display errors and prevent submit
+		if (!valid) {
+			event.preventDefault();
+			alert(errors.join('\n'));
 		}
 	});
 });
+
 </script>
 
 <div class="wrap">
-	<br />
-	<div id="poststuff" class="postbox">
-		<h3 class="hndle"><span>
-			<?php _e('Add New Album For AI Gallery','aigallery'); ?>
-		</span></h3>
-		<div class="inside">
-			<form method="post" name="frmnewalbum" id="frmnewalbum" enctype="multipart/form-data">
-				<table class="form-table">
-					<?php $ai_album_nonce = wp_create_nonce( 'add-album' );?>
-					<input type="hidden" name="_wpnonce" value="<?php echo esc_attr($ai_album_nonce);?>"/>
-					<tr>
-						<td width="10%" nowrap="nowrap"><?php _e('Title','aigallery'); ?><?php _e('*','aigallery'); ?></td>
-						<td><input type="text" style="text-align:left;" value="<?php echo esc_attr($ai_edit_res[0]['album_title']); ?>" maxlength="16" size="50" name="album_title" id="album_title" class="required"></td>
-					</tr>
-					<tr>
-						<td nowrap="nowrap"><?php _e('Album Cover Image','aigallery'); ?></td>
-						<td><input type="file" size="30" value="" name="album_image" id="album_image">
-							<?php $ai_cover_url = esc_url($ai_file_thumb.$thub_album_name) ; ?>
-							<?php if(isset($ai_cover_url) && !empty($ai_cover_url)){?>
-								<div><img border="0" id="pic" src="<?php echo $ai_cover_url;?>"></div>
-							<?php } ?>
-							<?php _e('Valid file format : .jpg|.jpeg|.png|.gif ','aigallery'); ?>
-						</td>
-					</tr>
-					<tr>
-						<td nowrap="nowrap"><?php _e('Active? ','aigallery'); ?></td>
-						<td>
-							<?php $ai_visible=array('Yes'=>'1','No'=>'0'); ?>
-							<select name="album_visible" id="album_visible">
-								<?php foreach($ai_visible as $ai_k=>$ai_v){ ?>
-									<option value="<?php echo esc_attr($ai_v); ?>" <?php selected( $ai_v, $ai_edit_res[0]['album_visible']);?> ><?php echo $ai_k; ?></option>
-								<?php } ?>
-							</select>
-						</td>
-					</tr>
-					<tr>
-						<td nowrap="nowrap">&nbsp;</td>
-						<td align="left">
-							<span style="float:right; color:#CB2001">
-								<?php _e('Fields marked with','aigallery'); ?>
-								( <?php _e('*','aigallery'); ?> )
-								<?php _e('are mandatory.','aigallery'); ?>
-							</span>
-							<?php
-							if(isset($_REQUEST['action']) && $_REQUEST['action']='Edit') {
-								$button_value="Update";
-								$action="Update";
-							} else {
-								$button_value="Save";
-								$action="Add";
-							}
-							?>
-							<input type="submit" class="save button button-primary" value="<?php echo esc_attr($button_value);?>" name="Submit">
-							<input type="submit" class="cancel button button-primary" value="Cancel" name="Submit">
-							<input type="hidden" value="<?php echo esc_attr($action);?>" name="Action">
-							<input type="hidden" value="<?php echo esc_attr($ai_edit_res[0]['album_date']); ?>" name="album_date">
-							<input type="hidden" value="<?php echo esc_attr($ai_edit_res[0]['album_slug']); ?>" name="album_slug">
-							<input type="hidden" value="<?php echo esc_attr($ai_edit_res[0]['album_id']); ?>" name="album_id">
-						</td>
-					</tr>
-				</table>
-			</form>
+	<h1><?php _e('Add New Album for AI Gallery', 'aigallery'); ?></h1>
+	<form method="post" name="frmnewalbum" id="frmnewalbum" enctype="multipart/form-data">
+		<?php wp_nonce_field( 'add-album' ); ?>
+		
+		<div class="form-field">
+			<label for="album_title"><?php _e('Album Title', 'aigallery'); ?> *</label>
+			<input type="text" name="album_title" id="album_title" class="regular-text" required
+			       value="<?php echo esc_attr( $ai_edit_res[0]['album_title'] ?? '' ); ?>">
 		</div>
-	</div>
+
+		<div class="form-field">
+			<label for="album_image"><?php _e('Album Cover Image', 'aigallery'); ?></label>
+			<input type="file" name="album_image" id="album_image" accept=".jpg,.jpeg,.png,.gif">
+			<?php
+			if ( ! empty( $ai_file_thumb ) && ! empty( $thub_album_name ) ) {
+				$cover_url = esc_url( $ai_file_thumb . $thub_album_name );
+				echo '<div><img src="' . $cover_url . '" alt="Album Cover" style="max-width: 200px;"></div>';
+			}
+			?>
+			<p class="description"><?php _e('Allowed file types: .jpg, .jpeg, .png, .gif', 'aigallery'); ?></p>
+		</div>
+
+		<div class="form-field">
+			<label for="album_visible"><?php _e('Visible?', 'aigallery'); ?></label>
+			<select name="album_visible" id="album_visible">
+				<option value="1" <?php selected( $ai_edit_res[0]['album_visible'] ?? '', '1' ); ?>><?php _e('Yes', 'aigallery'); ?></option>
+				<option value="0" <?php selected( $ai_edit_res[0]['album_visible'] ?? '', '0' ); ?>><?php _e('No', 'aigallery'); ?></option>
+			</select>
+		</div>
+
+		<p class="submit">
+			<input type="submit" class="button-primary" value="<?php echo esc_attr( $button_value ); ?>" name="Submit">
+			<input type="submit" class="button" value="<?php esc_attr_e( 'Cancel' ); ?>" name="Submit">
+			<input type="hidden" name="Action" value="<?php echo esc_attr( $action ); ?>">
+			<input type="hidden" name="album_date" value="<?php echo esc_attr( $ai_edit_res[0]['album_date'] ?? '' ); ?>">
+			<input type="hidden" name="album_slug" value="<?php echo esc_attr( $ai_edit_res[0]['album_slug'] ?? '' ); ?>">
+			<input type="hidden" name="album_id" value="<?php echo esc_attr( $ai_edit_res[0]['album_id'] ?? '' ); ?>">
+		</p>
+
+		<p class="description">
+			<?php _e('Fields marked with * are required.', 'aigallery'); ?>
+		</p>
+	</form>
 </div>
